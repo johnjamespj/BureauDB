@@ -52,3 +52,36 @@ func GroupBy[T util.Comparable[T], U any](it Iterator[T], f func(T) U) Iterable[
 
 	return NewSliceIterable[GroupByRecord[T, U]](res)
 }
+
+func FlatMap[V any](it Iterable[Iterable[V]]) Iterable[V] {
+	return &BaseIterable[V]{
+		builder: func() Iterator[V] {
+			return &FlatMapIterator[V]{
+				i: it.Itr(),
+			}
+		},
+	}
+}
+
+type FlatMapIterator[V any] struct {
+	i Iterator[Iterable[V]]
+	j Iterator[V]
+}
+
+func (i *FlatMapIterator[V]) Move() (V, bool) {
+	if i.j == nil {
+		if v, ok := i.i.Move(); ok {
+			i.j = v.Itr()
+		} else {
+			return *new(V), false
+		}
+	}
+
+	if v, ok := i.j.Move(); ok {
+		return v, true
+	}
+
+	i.j = nil
+
+	return i.Move()
+}

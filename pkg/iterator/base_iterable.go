@@ -1,5 +1,7 @@
 package iterator
 
+import "container/list"
+
 type BaseIterable[V any] struct {
 	builder func() Iterator[V]
 }
@@ -63,6 +65,14 @@ func (i *BaseIterable[V]) FollowedBy(itr ...Iterable[V]) Iterable[V] {
 		return &ChainIterator[V]{
 			Iterables: iterators,
 			idx:       0,
+		}
+	})
+}
+
+func (i *BaseIterable[V]) Reversed() Iterable[V] {
+	return BaseIterableFrom(func() Iterator[V] {
+		return &ReversedIterator[V]{
+			Iterable: i.Itr(),
 		}
 	})
 }
@@ -175,6 +185,31 @@ func (i *ChainIterator[V]) Move() (V, bool) {
 		}
 
 		i.idx++
+	}
+
+	return *new(V), false
+}
+
+type ReversedIterator[V any] struct {
+	Iterable Iterator[V]
+	stack    list.List
+}
+
+func (i *ReversedIterator[V]) Move() (V, bool) {
+	if i.stack.Len() > 0 {
+		v := i.stack.Back()
+		i.stack.Remove(v)
+		return v.Value.(V), true
+	}
+
+	for v, ok := i.Iterable.Move(); ok; v, ok = i.Iterable.Move() {
+		i.stack.PushBack(v)
+	}
+
+	if i.stack.Len() > 0 {
+		v := i.stack.Back()
+		i.stack.Remove(v)
+		return v.Value.(V), true
 	}
 
 	return *new(V), false

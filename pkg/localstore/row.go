@@ -2,6 +2,7 @@ package localstore
 
 import (
 	"bytes"
+	"crypto/md5"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -106,7 +107,30 @@ func (r *Row) ToBytes() []byte {
 }
 
 func (r *Row) ToString() string {
-	return fmt.Sprintf("Row{Sequence: %d, Timestamp: %d, KeyHash: %s, RowHash: %s, size: %d}", r.Sequence, r.Timestamp, hex.EncodeToString(r.KeyHash), hex.EncodeToString(r.RowHash), r.Size())
+	return fmt.Sprintf("Row{Sequence: %d, Timestamp: %d, KeyHash: %s, RowHash: %s, size: %d, key: %s}", r.Sequence, r.Timestamp, hex.EncodeToString(r.KeyHash), hex.EncodeToString(r.RowHash), r.Size(), r.Key)
+}
+
+func (r *Row) CompareTo(other *Row) int {
+	keyCmp := bytes.Compare(r.KeyHash, other.KeyHash)
+	if keyCmp != 0 {
+		return keyCmp
+	}
+
+	skCmp := bytes.Compare(r.SortKey, other.SortKey)
+	if skCmp != 0 {
+		return skCmp
+	}
+
+	return int(r.Sequence) - int(other.Sequence)
 }
 
 type DataSlice []byte
+
+func (d *DataSlice) CompareTo(other *DataSlice) int {
+	return bytes.Compare(*d, *other)
+}
+
+func (d *DataSlice) Hash() DataSlice {
+	hash := md5.Sum(*d)
+	return hash[:]
+}

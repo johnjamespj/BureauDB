@@ -13,6 +13,8 @@ type Iterable[V any] interface {
 
 	FollowedBy(itr ...Iterable[V]) Iterable[V]
 
+	Reversed() Iterable[V]
+
 	Any(pred func(V) bool) bool
 
 	Every(pred func(V) bool) bool
