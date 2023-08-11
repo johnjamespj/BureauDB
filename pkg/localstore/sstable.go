@@ -498,11 +498,7 @@ func (s *SSTableReader) IsInRange(partitionKeyHash DataSlice, sortKey DataSlice,
 	return true
 }
 
-func (s *SSTableReader) Head(partitionKeyHash DataSlice, sortKey DataSlice, sequenceNumber int64) iterator.Iterable[*Row] {
-	if s.IsInRange(partitionKeyHash, sortKey, 0) {
-		return iterator.NewEmptyIterable[*Row]()
-	}
-
+func (s *SSTableReader) Head(partitionKeyHash DataSlice, sortKey DataSlice) iterator.Iterable[*Row] {
 	l := len(s.blockIndex)
 	row := &Row{
 		KeyHash: partitionKeyHash,
@@ -527,11 +523,7 @@ func (s *SSTableReader) Head(partitionKeyHash DataSlice, sortKey DataSlice, sequ
 	})
 }
 
-func (s *SSTableReader) Tail(partitionKeyHash DataSlice, sortKey DataSlice, sequenceNumber int64) iterator.Iterable[*Row] {
-	if s.IsInRange(partitionKeyHash, sortKey, 0) {
-		return iterator.NewEmptyIterable[*Row]()
-	}
-
+func (s *SSTableReader) Tail(partitionKeyHash DataSlice, sortKey DataSlice) iterator.Iterable[*Row] {
 	l := len(s.blockIndex)
 	row := &Row{
 		KeyHash: partitionKeyHash,
