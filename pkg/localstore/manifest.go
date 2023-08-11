@@ -15,22 +15,22 @@ const (
 )
 
 type FileRef struct {
-	ID   int64
+	ID   string
 	Type FileType
 }
 
 type Manifest struct {
 	dirPath  string
 	rwlock   sync.RWMutex
-	sstables map[int64]*FileRef
-	wals     map[int64]*FileRef
+	sstables map[string]*FileRef
+	wals     map[string]*FileRef
 }
 
 func NewManifest(dirPath string) (*Manifest, error) {
 	manifest := &Manifest{
 		dirPath:  dirPath,
-		sstables: make(map[int64]*FileRef),
-		wals:     make(map[int64]*FileRef),
+		sstables: make(map[string]*FileRef),
+		wals:     make(map[string]*FileRef),
 	}
 
 	err := manifest.readFromFile()
@@ -41,7 +41,7 @@ func NewManifest(dirPath string) (*Manifest, error) {
 	return manifest, nil
 }
 
-func (m *Manifest) AddSSTable(id int64) {
+func (m *Manifest) AddSSTable(id string) {
 	m.rwlock.Lock()
 	defer m.rwlock.Unlock()
 	m.sstables[id] = &FileRef{
@@ -50,7 +50,7 @@ func (m *Manifest) AddSSTable(id int64) {
 	}
 }
 
-func (m *Manifest) AddWAL(id int64) {
+func (m *Manifest) AddWAL(id string) {
 	m.rwlock.Lock()
 	defer m.rwlock.Unlock()
 	m.wals[id] = &FileRef{
@@ -59,16 +59,24 @@ func (m *Manifest) AddWAL(id int64) {
 	}
 }
 
-func (m *Manifest) RemoveSSTable(id int64) {
+func (m *Manifest) RemoveSSTable(id string) {
 	m.rwlock.Lock()
 	defer m.rwlock.Unlock()
 	delete(m.sstables, id)
 }
 
-func (m *Manifest) RemoveWAL(id int64) {
+func (m *Manifest) RemoveWAL(id string) {
 	m.rwlock.Lock()
 	defer m.rwlock.Unlock()
 	delete(m.wals, id)
+}
+
+func (m *Manifest) RemoveWALs(ids []string) {
+	m.rwlock.Lock()
+	defer m.rwlock.Unlock()
+	for _, id := range ids {
+		delete(m.wals, id)
+	}
 }
 
 func (m *Manifest) GetSSTables() []*FileRef {
@@ -98,12 +106,12 @@ func (m *Manifest) saveToTempFile() error {
 	}
 	defer file.Close()
 
-	sstableIds := []int64{}
+	sstableIds := []string{}
 	for id := range m.sstables {
 		sstableIds = append(sstableIds, id)
 	}
 
-	walIds := []int64{}
+	walIds := []string{}
 	for id := range m.wals {
 		walIds = append(walIds, id)
 	}
@@ -158,16 +166,18 @@ func (m *Manifest) readFromFile() error {
 
 	sstableIds := data["sstables"].([]any)
 	for _, id := range sstableIds {
-		m.sstables[int64(id.(float64))] = &FileRef{
-			ID:   int64(id.(float64)),
+		idStr := id.(string)
+		m.sstables[idStr] = &FileRef{
+			ID:   idStr,
 			Type: SSTabelFile,
 		}
 	}
 
 	walIds := data["wals"].([]any)
 	for _, id := range walIds {
-		m.wals[int64(id.(float64))] = &FileRef{
-			ID:   int64(id.(float64)),
+		idStr := id.(string)
+		m.wals[string(idStr)] = &FileRef{
+			ID:   string(idStr),
 			Type: WALFile,
 		}
 	}

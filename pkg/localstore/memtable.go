@@ -2,6 +2,7 @@ package localstore
 
 import (
 	"bytes"
+	"math"
 
 	"github.com/johnjamespj/BureauDB/pkg/iterator"
 	"github.com/johnjamespj/BureauDB/pkg/util"
@@ -12,7 +13,10 @@ type Memtable struct {
 	list      *Skiplist[*Row]
 	tableSize int64
 
+	maxSequence         int64
 	minSequence         int64
+	maxTimestamp        int64
+	minTimestamp        int64
 	maxPartitionKeyHash DataSlice
 	minPartitionKeyHash DataSlice
 	maxSortKey          DataSlice
@@ -31,14 +35,32 @@ func NewMemtable(wal *WAL) *Memtable {
 	}
 }
 
-func (m *Memtable) Size() int64 {
-	return m.size
-}
-
-func (m *Memtable) Add(row *Row) {
+func (m *Memtable) Append(row *Row) {
 	rowCopy := *row
 	rowCopy.RowType = Put
 	m.wal.Write(&rowCopy)
+
+	m.maxSequence = int64(math.Max(float64(m.maxSequence), float64(row.Sequence)))
+	m.minSequence = int64(math.Min(float64(m.minSequence), float64(row.Sequence)))
+	m.maxTimestamp = int64(math.Max(float64(m.maxTimestamp), float64(row.Timestamp)))
+	m.minTimestamp = int64(math.Min(float64(m.minTimestamp), float64(row.Timestamp)))
+
+	if bytes.Compare(m.maxPartitionKeyHash, row.KeyHash) < 0 {
+		m.maxPartitionKeyHash = row.KeyHash
+	}
+
+	if bytes.Compare(m.minPartitionKeyHash, row.KeyHash) > 0 {
+		m.minPartitionKeyHash = row.KeyHash
+	}
+
+	if bytes.Compare(m.maxSortKey, row.SortKey) < 0 {
+		m.maxSortKey = row.SortKey
+	}
+
+	if bytes.Compare(m.minSortKey, row.SortKey) > 0 {
+		m.minSortKey = row.SortKey
+	}
+
 	m.list.Put(&rowCopy)
 	m.size += 1
 	m.tableSize += int64(rowCopy.Size())
@@ -102,4 +124,20 @@ func (m *Memtable) MightContain(partitionKeyHash DataSlice, sortKey DataSlice) b
 		partitionKeyHash,
 		sortKey,
 	}, []byte{}))
+}
+
+func (m *Memtable) Close() error {
+	return m.wal.Close()
+}
+
+func (m *Memtable) CleanUp() error {
+	return m.wal.CleanUp()
+}
+
+func (m *Memtable) Size() int64 {
+	return m.size
+}
+
+func (m *Memtable) GetTableSize() int64 {
+	return m.tableSize
 }

@@ -19,10 +19,6 @@ type Decompressor interface {
 type NoCompressionWriter struct {
 }
 
-func NewNoCompressionWriter() *NoCompressionWriter {
-	return &NoCompressionWriter{}
-}
-
 func (w *NoCompressionWriter) Compress(p []byte) ([]byte, error) {
 	return p, nil
 }
@@ -30,19 +26,11 @@ func (w *NoCompressionWriter) Compress(p []byte) ([]byte, error) {
 type NoCompressionReader struct {
 }
 
-func NewNoCompressionReader() *NoCompressionReader {
-	return &NoCompressionReader{}
-}
-
 func (r *NoCompressionReader) Decompress(p []byte) ([]byte, error) {
 	return p, nil
 }
 
 type Lz4CompressionWriter struct{}
-
-func NewLz4CompressionWriter() *Lz4CompressionWriter {
-	return &Lz4CompressionWriter{}
-}
 
 func (w *Lz4CompressionWriter) Compress(p []byte) ([]byte, error) {
 	var b bytes.Buffer
@@ -67,10 +55,6 @@ func (w *Lz4CompressionWriter) Compress(p []byte) ([]byte, error) {
 }
 
 type Lz4CompressionReader struct{}
-
-func NewLz4CompressionReader() *Lz4CompressionReader {
-	return &Lz4CompressionReader{}
-}
 
 func (r *Lz4CompressionReader) Decompress(p []byte) ([]byte, error) {
 	var b bytes.Buffer

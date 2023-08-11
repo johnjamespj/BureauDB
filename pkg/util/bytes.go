@@ -2,8 +2,9 @@ package util
 
 import "crypto/md5"
 
-func HashBytes(b []byte) [16]byte {
-	return md5.Sum(b)
+func HashBytes(b []byte) []byte {
+	res := md5.Sum(b)
+	return res[:]
 }
 
 func Int64ToBytes(i int64) []byte {

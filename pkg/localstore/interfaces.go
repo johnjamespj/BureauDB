@@ -12,4 +12,8 @@ type NavigableTable interface {
 	IsInRange(partitionKeyHash DataSlice, sortKey DataSlice, sequenceNumber int64) bool
 
 	MightContain(partitionKeyHash DataSlice, sortKey DataSlice) bool
+
+	Close() error
+
+	CleanUp() error
 }

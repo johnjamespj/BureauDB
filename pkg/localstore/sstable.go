@@ -302,98 +302,112 @@ func (s *SSTableWriter) Close() error {
 	return s.file.Close()
 }
 
-type SSTableReader struct {
-	file         *os.File
-	decompressor Decompressor
-	tableId      string
+type SSTableMetadata struct {
+	MaxTimestamp        int64
+	MinTimestamp        int64
+	MaxSequence         int64
+	MinSequence         int64
+	MaxPartitionKeyHash DataSlice
+	MinPartitionKeyHash DataSlice
+	MaxSortKey          DataSlice
+	MinSortKey          DataSlice
+	Size                int64
 
-	maxTimestamp        int64
-	minTimestamp        int64
-	maxSequence         int64
-	minSequence         int64
-	maxPartitionKeyHash DataSlice
-	minPartitionKeyHash DataSlice
-	maxSortKey          DataSlice
-	minSortKey          DataSlice
-	size                int64
-
-	blockCache *lru.TwoQueueCache[string, []byte]
-	blockIndex []*BlockIndexEntry
-	filter     *util.Bloomfilter
+	BlockIndex []*BlockIndexEntry
+	Filter     *util.Bloomfilter
 }
 
-func NewSSTableReader(tableId string, file *os.File, decompressor Decompressor, cache *lru.TwoQueueCache[string, []byte]) (*SSTableReader, error) {
+type SSTableReader struct {
+	filepath        string
+	decompressor    Decompressor
+	metadata        *SSTableMetadata
+	fileHandleCache *lru.Cache[string, *os.File]
+	blockCache      *lru.TwoQueueCache[string, []byte]
+}
+
+func NewSSTableReader(filename string, decompressor Decompressor, cache *lru.TwoQueueCache[string, []byte], fileHandleCache *lru.Cache[string, *os.File]) (*SSTableReader, error) {
+	// if file does not exist, return error
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		return nil, err
+	}
+
 	return &SSTableReader{
-		tableId:      tableId,
-		file:         file,
-		decompressor: decompressor,
-		blockCache:   cache,
+		filepath:        filename,
+		decompressor:    decompressor,
+		blockCache:      cache,
+		fileHandleCache: fileHandleCache,
 	}, nil
 }
 
 func (s *SSTableReader) ReadMetadata() error {
-	_, err := s.file.Seek(-8, io.SeekEnd)
+	file, err := s.getFileHandle()
+	if err != nil {
+		return err
+	}
+	_, err = file.Seek(-8, io.SeekEnd)
 	if err != nil {
 		return err
 	}
 
 	metadataBlockOffsetBytes := make([]byte, 8)
-	_, err = s.file.Read(metadataBlockOffsetBytes)
+	_, err = file.Read(metadataBlockOffsetBytes)
 	if err != nil {
 		return err
 	}
 
 	metadataBlockOffset := util.BytesToInt64(metadataBlockOffsetBytes, 0)
 
-	_, err = s.file.Seek(metadataBlockOffset, io.SeekStart)
+	_, err = file.Seek(metadataBlockOffset, io.SeekStart)
 	if err != nil {
 		return err
 	}
 
-	buf := bufio.NewReader(s.file)
+	var metadata SSTableMetadata
+
+	buf := bufio.NewReader(file)
 	dec := msgpack.NewDecoder(buf)
 
-	err = dec.Decode(&s.maxPartitionKeyHash)
+	err = dec.Decode(&metadata.MaxPartitionKeyHash)
 	if err != nil {
 		return err
 	}
 
-	err = dec.Decode(&s.minPartitionKeyHash)
+	err = dec.Decode(&metadata.MinPartitionKeyHash)
 	if err != nil {
 		return err
 	}
 
-	err = dec.Decode(&s.maxSortKey)
+	err = dec.Decode(&metadata.MaxSortKey)
 	if err != nil {
 		return err
 	}
 
-	err = dec.Decode(&s.minSortKey)
+	err = dec.Decode(&metadata.MinSortKey)
 	if err != nil {
 		return err
 	}
 
-	err = dec.Decode(&s.maxSequence)
+	err = dec.Decode(&metadata.MaxSequence)
 	if err != nil {
 		return err
 	}
 
-	err = dec.Decode(&s.minSequence)
+	err = dec.Decode(&metadata.MinSequence)
 	if err != nil {
 		return err
 	}
 
-	err = dec.Decode(&s.maxTimestamp)
+	err = dec.Decode(&metadata.MaxTimestamp)
 	if err != nil {
 		return err
 	}
 
-	err = dec.Decode(&s.minTimestamp)
+	err = dec.Decode(&metadata.MinTimestamp)
 	if err != nil {
 		return err
 	}
 
-	err = dec.Decode(&s.size)
+	err = dec.Decode(&metadata.Size)
 	if err != nil {
 		return err
 	}
@@ -403,7 +417,7 @@ func (s *SSTableReader) ReadMetadata() error {
 		return err
 	}
 
-	s.blockIndex = make([]*BlockIndexEntry, blockIndexLen)
+	metadata.BlockIndex = make([]*BlockIndexEntry, blockIndexLen)
 	for i := 0; i < blockIndexLen; i++ {
 		offset, err := dec.DecodeInt64()
 		if err != nil {
@@ -421,7 +435,7 @@ func (s *SSTableReader) ReadMetadata() error {
 		if err != nil {
 			return err
 		}
-		s.blockIndex[i] = &BlockIndexEntry{
+		metadata.BlockIndex[i] = &BlockIndexEntry{
 			Offset:      offset,
 			Size:        int(size),
 			StartRowRef: startRowRef,
@@ -433,18 +447,18 @@ func (s *SSTableReader) ReadMetadata() error {
 		return err
 	}
 
-	s.filter = util.NewBloomfilterFromBytes(filterBytes, 12)
+	metadata.Filter = util.NewBloomfilterFromBytes(filterBytes, 12)
 	return nil
 }
 
 func (s *SSTableReader) MetadataToString() string {
 	return fmt.Sprintf("maxPartitionKeyHash: %s, minPartitionKeyHash: %s, maxSortKey: %s, minSortKey: %s, maxSequence: %d, minSequence: %d, maxTimestamp: %d, minTimestamp: %d, size: %d",
-		hex.EncodeToString(s.maxPartitionKeyHash), hex.EncodeToString(s.minPartitionKeyHash), s.maxSortKey, s.minSortKey, s.maxSequence, s.minSequence, s.maxTimestamp, s.minTimestamp, s.size)
+		hex.EncodeToString(s.metadata.MaxPartitionKeyHash), hex.EncodeToString(s.metadata.MinPartitionKeyHash), s.metadata.MaxSortKey, s.metadata.MinSortKey, s.metadata.MaxSequence, s.metadata.MinSequence, s.metadata.MaxTimestamp, s.metadata.MinTimestamp, s.metadata.Size)
 }
 
 func (s *SSTableReader) BlockIndexToString() string {
 	var result string
-	for _, entry := range s.blockIndex {
+	for _, entry := range s.metadata.BlockIndex {
 		result += fmt.Sprintf("offset: %d, size: %d, startRowRef: %s\n", entry.Offset, entry.Size, entry.StartRowRef.ToString())
 	}
 	return result
@@ -455,43 +469,43 @@ func (s *SSTableReader) Forward() iterator.Iterable[*Row] {
 		func(idx int) iterator.Iterable[*Row] {
 			return s.ReadBlock(idx)
 		},
-		len(s.blockIndex),
+		len(s.metadata.BlockIndex),
 	))
 }
 
 func (s *SSTableReader) Backward() iterator.Iterable[*Row] {
 	return iterator.FlatMap(iterator.NewGeneratorIterable(
 		func(idx int) iterator.Iterable[*Row] {
-			return s.ReadBlock(len(s.blockIndex) - idx - 1).Reversed()
+			return s.ReadBlock(len(s.metadata.BlockIndex) - idx - 1).Reversed()
 		},
-		len(s.blockIndex),
+		len(s.metadata.BlockIndex),
 	))
 }
 
 func (s *SSTableReader) MightContain(partitionKeyHash DataSlice, sortKey DataSlice) bool {
-	return s.filter.Contains(bytes.Join([][]byte{
+	return s.metadata.Filter.Contains(bytes.Join([][]byte{
 		partitionKeyHash,
 		sortKey,
 	}, []byte{}))
 }
 
 func (s *SSTableReader) IsInRange(partitionKeyHash DataSlice, sortKey DataSlice, sequenceNumber int64) bool {
-	if s.minSequence < sequenceNumber {
+	if s.metadata.MinSequence < sequenceNumber {
 		return false
 	}
 
-	if bytes.Compare(s.minPartitionKeyHash, partitionKeyHash) < 0 ||
-		bytes.Compare(s.maxPartitionKeyHash, partitionKeyHash) > 0 {
+	if bytes.Compare(s.metadata.MinPartitionKeyHash, partitionKeyHash) < 0 ||
+		bytes.Compare(s.metadata.MaxPartitionKeyHash, partitionKeyHash) > 0 {
 		return false
 	}
 
-	if bytes.Equal(s.maxPartitionKeyHash, partitionKeyHash) &&
-		bytes.Compare(s.maxSortKey, sortKey) < 0 {
+	if bytes.Equal(s.metadata.MaxPartitionKeyHash, partitionKeyHash) &&
+		bytes.Compare(s.metadata.MaxSortKey, sortKey) < 0 {
 		return false
 	}
 
-	if bytes.Equal(s.minPartitionKeyHash, partitionKeyHash) &&
-		bytes.Compare(s.minSortKey, sortKey) > 0 {
+	if bytes.Equal(s.metadata.MinPartitionKeyHash, partitionKeyHash) &&
+		bytes.Compare(s.metadata.MinSortKey, sortKey) > 0 {
 		return false
 	}
 
@@ -499,19 +513,19 @@ func (s *SSTableReader) IsInRange(partitionKeyHash DataSlice, sortKey DataSlice,
 }
 
 func (s *SSTableReader) Head(partitionKeyHash DataSlice, sortKey DataSlice) iterator.Iterable[*Row] {
-	l := len(s.blockIndex)
+	l := len(s.metadata.BlockIndex)
 	row := &Row{
 		KeyHash: partitionKeyHash,
 		SortKey: sortKey,
 	}
 	idx := sort.Search(l, func(i int) bool {
-		return s.blockIndex[i].StartRowRef.CompareTo(row) >= 0
+		return s.metadata.BlockIndex[i].StartRowRef.CompareTo(row) >= 0
 	})
 	if idx == l {
 		idx--
 	}
 
-	blockRef := s.blockIndex[idx].StartRowRef
+	blockRef := s.metadata.BlockIndex[idx].StartRowRef
 	if bytes.Equal(blockRef.KeyHash, partitionKeyHash) && bytes.Compare(blockRef.SortKey, sortKey) >= 0 {
 		idx--
 	}
@@ -524,13 +538,13 @@ func (s *SSTableReader) Head(partitionKeyHash DataSlice, sortKey DataSlice) iter
 }
 
 func (s *SSTableReader) Tail(partitionKeyHash DataSlice, sortKey DataSlice) iterator.Iterable[*Row] {
-	l := len(s.blockIndex)
+	l := len(s.metadata.BlockIndex)
 	row := &Row{
 		KeyHash: partitionKeyHash,
 		SortKey: sortKey,
 	}
 	idx := sort.Search(l, func(i int) bool {
-		return s.blockIndex[i].StartRowRef.CompareTo(row) >= 0
+		return s.metadata.BlockIndex[i].StartRowRef.CompareTo(row) >= 0
 	})
 	if idx == l {
 		idx--
@@ -546,25 +560,39 @@ func (s *SSTableReader) Tail(partitionKeyHash DataSlice, sortKey DataSlice) iter
 }
 
 func (s *SSTableReader) Size() int64 {
-	return s.size
+	return s.metadata.Size
+}
+
+func (s *SSTableReader) Close() error {
+	s.fileHandleCache.Remove(s.filepath)
+	return nil
+}
+
+func (s *SSTableReader) CleanUp() error {
+	return os.Remove(s.filepath)
 }
 
 func (s *SSTableReader) ReadBlock(idx int) iterator.Iterable[*Row] {
 	return iterator.BaseIterableFrom(func() iterator.Iterator[*Row] {
-		cacheKey := fmt.Sprintf("%s.%d", s.tableId, idx)
+		cacheKey := fmt.Sprintf("%s.%d", s.filepath, idx)
 
 		var b []byte
 		if s.blockCache.Contains(cacheKey) {
 			b, _ = s.blockCache.Get(cacheKey)
 		} else {
-			entry := s.blockIndex[idx]
-			_, err := s.file.Seek(entry.Offset, io.SeekStart)
+			file, err := s.getFileHandle()
+			if err != nil {
+				return iterator.NewEmptyIterable[*Row]().Itr()
+			}
+
+			entry := s.metadata.BlockIndex[idx]
+			_, err = file.Seek(entry.Offset, io.SeekStart)
 			if err != nil {
 				return iterator.NewEmptyIterable[*Row]().Itr()
 			}
 
 			b = make([]byte, entry.Size)
-			_, err = s.file.Read(b)
+			_, err = file.Read(b)
 			if err != nil {
 				return iterator.NewEmptyIterable[*Row]().Itr()
 			}
@@ -582,6 +610,21 @@ func (s *SSTableReader) ReadBlock(idx int) iterator.Iterable[*Row] {
 			reader: reader,
 		}
 	})
+}
+
+func (s *SSTableReader) getFileHandle() (*os.File, error) {
+	file, ok := s.fileHandleCache.Get(s.filepath)
+	if ok {
+		return file, nil
+	}
+
+	file, err := os.Open(s.filepath)
+	if err != nil {
+		return nil, err
+	}
+
+	s.fileHandleCache.Add(s.filepath, file)
+	return file, nil
 }
 
 type BlockIterator struct {

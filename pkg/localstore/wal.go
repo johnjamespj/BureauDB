@@ -56,6 +56,10 @@ func (w *WAL) Close() error {
 	return w.file.Close()
 }
 
+func (w *WAL) CleanUp() error {
+	return os.Remove(w.filename)
+}
+
 type WALIterator struct {
 	file *os.File
 }
