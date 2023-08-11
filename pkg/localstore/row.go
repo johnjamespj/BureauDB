@@ -10,6 +10,12 @@ import (
 	"github.com/vmihailenco/msgpack"
 )
 
+// These are not legal sort keys, but are used to represent the largest and smallest possible sort keys.
+var (
+	LargestSortKey  = []byte{0x0}
+	SmallestSortKey = []byte{}
+)
+
 type RowType int
 
 const (
@@ -107,7 +113,7 @@ func (r *Row) ToBytes() []byte {
 }
 
 func (r *Row) ToString() string {
-	return fmt.Sprintf("Row{Sequence: %d, Timestamp: %d, KeyHash: %s, RowHash: %s, size: %d, key: %s}", r.Sequence, r.Timestamp, hex.EncodeToString(r.KeyHash), hex.EncodeToString(r.RowHash), r.Size(), r.Key)
+	return fmt.Sprintf("Row{Sequence: %d, Timestamp: %d, KeyHash: %s, RowHash: %s, size: %d, pk: %s, sk: %s}", r.Sequence, r.Timestamp, hex.EncodeToString(r.KeyHash), hex.EncodeToString(r.RowHash), r.Size(), r.Key, r.SortKey)
 }
 
 func (r *Row) CompareTo(other *Row) int {
@@ -116,19 +122,21 @@ func (r *Row) CompareTo(other *Row) int {
 		return keyCmp
 	}
 
+	if bytes.Equal(other.SortKey, LargestSortKey) {
+		return -1
+	} else if bytes.Equal(other.SortKey, SmallestSortKey) {
+		return 1
+	}
+
 	skCmp := bytes.Compare(r.SortKey, other.SortKey)
 	if skCmp != 0 {
 		return skCmp
 	}
 
-	return int(r.Sequence) - int(other.Sequence)
+	return int(other.Sequence) - int(r.Sequence)
 }
 
 type DataSlice []byte
-
-func (d *DataSlice) CompareTo(other *DataSlice) int {
-	return bytes.Compare(*d, *other)
-}
 
 func (d *DataSlice) Hash() DataSlice {
 	hash := md5.Sum(*d)

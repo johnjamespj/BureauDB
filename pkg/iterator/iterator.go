@@ -7,6 +7,8 @@ type Iterable[V any] interface {
 
 	Skip(n int) Iterable[V]
 
+	SkipWhile(pred func(V) bool) Iterable[V]
+
 	TakeWhile(pred func(V) bool) Iterable[V]
 
 	Where(pred func(V) bool) Iterable[V]

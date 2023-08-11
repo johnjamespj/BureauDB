@@ -3,13 +3,13 @@ package localstore
 import "github.com/johnjamespj/BureauDB/pkg/iterator"
 
 type NavigableTable interface {
-	Head(partitionKey DataSlice, sortKey DataSlice) iterator.Iterable[*Row]
+	Head(partitionKeyHash DataSlice, sortKey DataSlice) iterator.Iterable[*Row]
 
-	Tail(partitionKey DataSlice, sortKey DataSlice) iterator.Iterable[*Row]
+	Tail(partitionKeyHash DataSlice, sortKey DataSlice) iterator.Iterable[*Row]
 
 	Size() int64
 
-	IsInRange(partitionKey DataSlice, sortKey DataSlice) bool
+	IsInRange(partitionKeyHash DataSlice, sortKey DataSlice, sequenceNumber int64) bool
 
-	MightContain(partitionKey DataSlice, sortKey DataSlice) bool
+	MightContain(partitionKeyHash DataSlice, sortKey DataSlice) bool
 }

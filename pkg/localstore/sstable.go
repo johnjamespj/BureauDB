@@ -9,7 +9,9 @@ import (
 	"io"
 	"math"
 	"os"
+	"sort"
 
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/johnjamespj/BureauDB/pkg/iterator"
 	"github.com/johnjamespj/BureauDB/pkg/util"
 	"github.com/vmihailenco/msgpack"
@@ -303,6 +305,7 @@ func (s *SSTableWriter) Close() error {
 type SSTableReader struct {
 	file         *os.File
 	decompressor Decompressor
+	tableId      string
 
 	maxTimestamp        int64
 	minTimestamp        int64
@@ -314,14 +317,17 @@ type SSTableReader struct {
 	minSortKey          DataSlice
 	size                int64
 
+	blockCache *lru.TwoQueueCache[string, []byte]
 	blockIndex []*BlockIndexEntry
 	filter     *util.Bloomfilter
 }
 
-func NewSSTableReader(file *os.File, decompressor Decompressor) (*SSTableReader, error) {
+func NewSSTableReader(tableId string, file *os.File, decompressor Decompressor, cache *lru.TwoQueueCache[string, []byte]) (*SSTableReader, error) {
 	return &SSTableReader{
+		tableId:      tableId,
 		file:         file,
 		decompressor: decompressor,
+		blockCache:   cache,
 	}, nil
 }
 
@@ -462,27 +468,121 @@ func (s *SSTableReader) Backward() iterator.Iterable[*Row] {
 	))
 }
 
-func (s *SSTableReader) ReadBlock(idx int) iterator.Iterable[*Row] {
-	entry := s.blockIndex[idx]
-	_, err := s.file.Seek(entry.Offset, io.SeekStart)
-	if err != nil {
-		return iterator.NewEmptyIterable[*Row]()
-	}
-
-	b := make([]byte, entry.Size)
-	_, err = s.file.Read(b)
-	if err != nil {
-		return iterator.NewEmptyIterable[*Row]()
-	}
-
-	return s.readBlockIterable(b)
+func (s *SSTableReader) MightContain(partitionKeyHash DataSlice, sortKey DataSlice) bool {
+	return s.filter.Contains(bytes.Join([][]byte{
+		partitionKeyHash,
+		sortKey,
+	}, []byte{}))
 }
 
-func (s *SSTableReader) readBlockIterable(b []byte) iterator.Iterable[*Row] {
+func (s *SSTableReader) IsInRange(partitionKeyHash DataSlice, sortKey DataSlice, sequenceNumber int64) bool {
+	if s.minSequence < sequenceNumber {
+		return false
+	}
+
+	if bytes.Compare(s.minPartitionKeyHash, partitionKeyHash) < 0 ||
+		bytes.Compare(s.maxPartitionKeyHash, partitionKeyHash) > 0 {
+		return false
+	}
+
+	if bytes.Equal(s.maxPartitionKeyHash, partitionKeyHash) &&
+		bytes.Compare(s.maxSortKey, sortKey) < 0 {
+		return false
+	}
+
+	if bytes.Equal(s.minPartitionKeyHash, partitionKeyHash) &&
+		bytes.Compare(s.minSortKey, sortKey) > 0 {
+		return false
+	}
+
+	return true
+}
+
+func (s *SSTableReader) Head(partitionKeyHash DataSlice, sortKey DataSlice, sequenceNumber int64) iterator.Iterable[*Row] {
+	if s.IsInRange(partitionKeyHash, sortKey, 0) {
+		return iterator.NewEmptyIterable[*Row]()
+	}
+
+	l := len(s.blockIndex)
+	row := &Row{
+		KeyHash: partitionKeyHash,
+		SortKey: sortKey,
+	}
+	idx := sort.Search(l, func(i int) bool {
+		return s.blockIndex[i].StartRowRef.CompareTo(row) >= 0
+	})
+	if idx == l {
+		idx--
+	}
+
+	blockRef := s.blockIndex[idx].StartRowRef
+	if bytes.Equal(blockRef.KeyHash, partitionKeyHash) && bytes.Compare(blockRef.SortKey, sortKey) >= 0 {
+		idx--
+	}
+
+	return iterator.FlatMap(iterator.NewGeneratorIterable(func(i int) iterator.Iterable[*Row] {
+		return s.ReadBlock(idx + i)
+	}, l-idx)).SkipWhile(func(r *Row) bool {
+		return r.CompareTo(row) < 0
+	})
+}
+
+func (s *SSTableReader) Tail(partitionKeyHash DataSlice, sortKey DataSlice, sequenceNumber int64) iterator.Iterable[*Row] {
+	if s.IsInRange(partitionKeyHash, sortKey, 0) {
+		return iterator.NewEmptyIterable[*Row]()
+	}
+
+	l := len(s.blockIndex)
+	row := &Row{
+		KeyHash: partitionKeyHash,
+		SortKey: sortKey,
+	}
+	idx := sort.Search(l, func(i int) bool {
+		return s.blockIndex[i].StartRowRef.CompareTo(row) >= 0
+	})
+	if idx == l {
+		idx--
+	}
+
+	return iterator.FlatMap(iterator.NewGeneratorIterable(func(i int) iterator.Iterable[*Row] {
+		return s.ReadBlock(i).Reversed()
+	}, idx).Reversed()).SkipWhile(
+		func(r *Row) bool {
+			return r.CompareTo(row) >= 0
+		},
+	)
+}
+
+func (s *SSTableReader) Size() int64 {
+	return s.size
+}
+
+func (s *SSTableReader) ReadBlock(idx int) iterator.Iterable[*Row] {
 	return iterator.BaseIterableFrom(func() iterator.Iterator[*Row] {
-		b, err := s.decompressor.Decompress(b)
-		if err != nil {
-			fmt.Println(err)
+		cacheKey := fmt.Sprintf("%s.%d", s.tableId, idx)
+
+		var b []byte
+		if s.blockCache.Contains(cacheKey) {
+			b, _ = s.blockCache.Get(cacheKey)
+		} else {
+			entry := s.blockIndex[idx]
+			_, err := s.file.Seek(entry.Offset, io.SeekStart)
+			if err != nil {
+				return iterator.NewEmptyIterable[*Row]().Itr()
+			}
+
+			b = make([]byte, entry.Size)
+			_, err = s.file.Read(b)
+			if err != nil {
+				return iterator.NewEmptyIterable[*Row]().Itr()
+			}
+
+			b, err = s.decompressor.Decompress(b)
+			if err != nil {
+				fmt.Println(err)
+			}
+
+			s.blockCache.Add(cacheKey, b)
 		}
 
 		reader := bytes.NewReader(b)

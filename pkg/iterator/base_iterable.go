@@ -36,6 +36,15 @@ func (i *BaseIterable[V]) Skip(n int) Iterable[V] {
 	})
 }
 
+func (i *BaseIterable[V]) SkipWhile(pred func(V) bool) Iterable[V] {
+	return BaseIterableFrom(func() Iterator[V] {
+		return &SkipWhileIterator[V]{
+			Iterator:  i.Itr(),
+			Predicate: pred,
+		}
+	})
+}
+
 func (i *BaseIterable[V]) TakeWhile(pred func(V) bool) Iterable[V] {
 	return BaseIterableFrom(func() Iterator[V] {
 		return &TakeWhileIterator[V]{
@@ -213,4 +222,23 @@ func (i *ReversedIterator[V]) Move() (V, bool) {
 	}
 
 	return *new(V), false
+}
+
+type SkipWhileIterator[V any] struct {
+	Iterator  Iterator[V]
+	Predicate func(V) bool
+	Start     bool
+}
+
+func (i *SkipWhileIterator[V]) Move() (V, bool) {
+	if !i.Start {
+		for v, ok := i.Iterator.Move(); ok; v, ok = i.Iterator.Move() {
+			if !i.Predicate(v) {
+				i.Start = true
+				return v, true
+			}
+		}
+	}
+
+	return i.Iterator.Move()
 }
